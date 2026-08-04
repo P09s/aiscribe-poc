@@ -1,0 +1,33 @@
+Patient name Ramesh Kumar, age 52, male.
+Diagnosis: Type 2 Diabetes Mellitus with hypertension.
+
+Prescription:
+Tab Metformin 500 mg — twice daily after meals — 30 days
+Tab Amlodipine 5 mg — once daily morning — 30 days
+Tab Telmisartan 40 mg — once daily morning — 30 days
+Tab Atorvastatin 10 mg — once daily at night — 30 days
+Inj Insulin Glargine 10 units — subcutaneous, once daily at bedtime
+
+Investigations: HbA1c, fasting blood glucose, lipid profile, serum creatinine, eGFR, albuminuria
+
+Follow up: 4 weeks
+
+Advice: low salt diet, daily 30 minute walk, monitor BP at home
+
+---
+
+Second patient for A/B testing (mix in some Hindi-English code-switching if you want to
+stress-test that, since that's the real usage pattern on the floor):
+
+Patient name Sunita Devi, age 45, female.
+Diagnosis: Community acquired pneumonia.
+
+Prescription:
+Tab Azithromycin 500 mg — once daily before meals — 5 days
+Tab Pantoprazole 40 mg — once daily before meals — 5 days
+Tab Paracetamol 650 mg — as needed for fever — SOS
+
+Investigations: chest X-ray, complete blood count, CRP
+
+Follow up: 1 week
+Advice: adequate rest, plenty of fluids

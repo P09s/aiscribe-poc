@@ -1,0 +1,27 @@
+# Environment variables and secrets
+.env
+
+# Python Virtual Environments
+venv/
+env/
+ENV/
+.venv/
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# OS-specific generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Local temporary files & caches
+*.wav
+*.webm
+eval/outputs/
