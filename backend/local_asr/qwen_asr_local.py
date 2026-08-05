@@ -1,7 +1,19 @@
+"""
+Self-hosted Qwen3-ASR endpoint — the "in-house, not Whisper" option.
+
+Qwen3-ASR (Alibaba, Apache 2.0) covers 30+ languages including Hindi/English
+with mid-sentence code-switching. Uses Qwen/Qwen3-ASR-0.6B-hf for now — swap
+to 1.7B-hf if 0.6B's accuracy on drug names doesn't hold up under the extended
+stress test (it's the smaller/faster of the two, which is likely part of why
+formulary drug names are landing rougher than expected — 1.7B is the next
+thing to try if the correction layer below still isn't enough).
+"""
+
 import os
 import re
 import tempfile
 import json
+import difflib
 import librosa
 import torch
 from dotenv import load_dotenv
@@ -28,6 +40,54 @@ MEDICAL_CONTEXT = (
     "HbA1c, BP, RBS, FBS, mg, ml, OD, BD, TDS, QID, SOS, stat. "
     "Numbers and dosages should be transcribed as digits (e.g. 500 mg, twice daily)."
 )
+
+# Same list as MEDICAL_CONTEXT, but as discrete entries for fuzzy-matching —
+# keep these two in sync when you extend the formulary.
+FORMULARY = [
+    "Metformin", "Amlodipine", "Amoxicillin", "Azithromycin", "Metronidazole",
+    "Pantoprazole", "Atorvastatin", "Losartan", "Paracetamol", "Ibuprofen",
+    "Cetirizine", "HbA1c", "BP", "RBS", "FBS",
+]
+_FORMULARY_LOWER = {w.lower(): w for w in FORMULARY}
+
+# Deliberately lower than app.py's Whisper cutoff (0.78). Qwen's drug-name
+# misses in testing were bigger distortions than Whisper's (e.g. "Amlodipine"
+# -> "MLOD pine", "Metformin" -> "मेटाफॉर्न") — a tighter cutoff would let
+# those slip through uncorrected. Lowering it risks more false-positive
+# corrections on words that were never drug names; that tradeoff is exactly
+# what the extended stress-test run should validate either way.
+FUZZY_CUTOFF = 0.62
+
+
+def correct_drug_names(text: str, cutoff: float = FUZZY_CUTOFF) -> str:
+    """Fuzzy-matches each word/short phrase against the known formulary and swaps
+    in the correct spelling on a close-enough match. Runs on whatever script the
+    ASR produced (Devanagari, Roman-script Hinglish, or English) — matching is
+    done against Roman-script formulary entries, so it only fixes formulary words
+    that came out in Roman characters. Devanagari renderings of drug names
+    (e.g. "मेटाफॉर्न") won't be caught by this pass; that's a known gap, not
+    a silent failure — flag it if it shows up a lot in the extended test."""
+    words = text.split()
+    out = []
+    i = 0
+    while i < len(words):
+        matched = False
+        for span in (2, 1):
+            if i + span > len(words):
+                continue
+            candidate = " ".join(words[i:i + span]).strip(",.।").lower()
+            if not candidate:
+                continue
+            match = difflib.get_close_matches(candidate, _FORMULARY_LOWER.keys(), n=1, cutoff=cutoff)
+            if match:
+                out.append(_FORMULARY_LOWER[match[0]])
+                i += span
+                matched = True
+                break
+        if not matched:
+            out.append(words[i])
+            i += 1
+    return " ".join(out)
 
 
 def _load_model():
@@ -106,6 +166,12 @@ async def transcribe(audio: UploadFile = File(...)):
         detected_lang = match.group(1) if match else None
         text = re.sub(r'^\s*language\s*[A-Za-z]+', '', raw_text, flags=re.IGNORECASE).strip()
 
+        # 7. Formulary correction — new. Catches Roman-script near-misses
+        # ("MLOD pine" -> "Amlodipine") after the language tag is gone, so the
+        # regex above isn't tripped up by corrected text and this isn't tripped
+        # up by the leaked tag.
+        text = correct_drug_names(text)
+
         if detected_lang and detected_lang.lower() not in ("english", "hindi"):
             print(f"Note: detected_lang={detected_lang} on expected en/hi audio")
 
@@ -133,6 +199,14 @@ into structured data for a prescription pad.
 Known formulary (prefer these spellings if the transcript contains a close variant,
 but do not invent a drug that isn't plausibly supported by the transcript):
 {MEDICAL_CONTEXT}
+
+IMPORTANT — follow_up vs. investigation timing: doctors often mention two different
+timeframes in one dictation — when to REPEAT A TEST (e.g. "HbA1c repeat after 3
+months") and when the PATIENT SHOULD COME BACK for a visit (e.g. "Follow up in 6
+weeks"). These are not the same thing. Only use an explicit "follow up" / "review"
+/ "come back" phrase for the follow_up field. A test-recheck interval belongs in
+investigations (e.g. "HbA1c (repeat in 3 months)"), never in follow_up, even if it's
+the only timeframe mentioned.
 
 Transcript:
 {transcript}

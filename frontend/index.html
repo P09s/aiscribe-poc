@@ -85,6 +85,9 @@ const chunkStatus = document.getElementById("chunkStatus");
 // Rough medical-term list used only for highlighting in the UI (not for ASR biasing).
 const MED_TERM_PATTERN = /\b(tab|tablet|cap|capsule|syrup|inj|injection|mg|ml|units|od|bd|tds|qid|sos|ac|pc|hs|metformin|amlodipine|telmisartan|atorvastatin|glipizide|insulin|glargine|pantoprazole|azithromycin|hba1c|egfr|ldl|bmi|creatinine|albuminuria|t2dm|hypertension|dyslipidemia|cad|ckd|systolic|diastolic)\b/gi;
 
+// Below this RMS, a chunk is treated as silence and never sent to the ASR at all.
+// This is what stops Whisper from hallucinating "Drugs. Drugs. Drugs." on dead air —
+// it never sees the dead air in the first place. Tune if your mic is quieter/louder.
 const SILENCE_RMS_THRESHOLD = 0.012;
 
 async function isSilent(blob) {
@@ -99,6 +102,7 @@ async function isSilent(blob) {
     audioCtx.close();
     return rms < SILENCE_RMS_THRESHOLD;
   } catch (e) {
+    // if we can't decode it, don't block sending — fail open
     return false;
   }
 }
@@ -109,12 +113,35 @@ function renderTranscript() {
     .join("") || '<div class="empty">Click "Use AiScribe" and start dictating...</div>';
 }
 
+// Word-level suffix/prefix match: finds the longest run of words at the end of
+// `prev` that exactly matches the start of `next`, and returns only the new
+// part of `next`. This is what lets overlapping chunks not double up in the
+// transcript. NOTE: this is exact-match, not fuzzy — if the ASR transcribes the
+// same overlapping audio slightly differently between the two chunks (plausible,
+// ASR isn't perfectly deterministic across calls), the overlap won't be detected
+// and you'll see a short duplicated phrase instead. That's a known limitation,
+// not a silent failure — if duplication shows up often in testing, a fuzzy
+// (edit-distance-tolerant) version of this is the next step, not a rewrite.
+function mergeOverlap(prev, next) {
+  const prevWords = prev.trim().split(/\s+/);
+  const nextWords = next.trim().split(/\s+/);
+  const maxOverlap = Math.min(prevWords.length, nextWords.length, 12);
+  for (let k = maxOverlap; k > 0; k--) {
+    const prevTail = prevWords.slice(-k).join(" ").toLowerCase();
+    const nextHead = nextWords.slice(0, k).join(" ").toLowerCase();
+    if (prevTail === nextHead) {
+      return nextWords.slice(k).join(" ");
+    }
+  }
+  return next; // no detected overlap — append as-is
+}
+
 async function sendChunk(blob) {
-  if (blob.size < 1500) return;
+  if (blob.size < 1500) return; // skip near-empty chunks outright
 
   if (await isSilent(blob)) {
     chunkStatus.textContent = "";
-    return;
+    return; // don't even hit the ASR with dead air
   }
 
   chunkStatus.textContent = "transcribing...";
@@ -130,19 +157,31 @@ async function sendChunk(blob) {
     const data = await res.json();
     chunkStatus.textContent = "";
     if (data.text && data.text.trim()) {
-      transcriptLines.push(data.text.trim());
-      renderTranscript();
-      generateBtn.disabled = false;
+      const lastLine = transcriptLines[transcriptLines.length - 1] || "";
+      const merged = mergeOverlap(lastLine, data.text.trim());
+      if (merged.trim()) {
+        transcriptLines.push(merged);
+        renderTranscript();
+        generateBtn.disabled = false;
+      }
     }
   } catch (err) {
     chunkStatus.textContent = usingQwenLocal
-      ? "Local ASR server not reachable — run script on :8001 first"
+      ? "Qwen local server not reachable — run qwen_asr_local.py on :8001 first"
       : "transcribe failed (is backend running?)";
     console.error("Transcribe failed", err);
   }
 }
 
-let mediaRecorder;
+// CHUNK_MS: length of each recording. OVERLAP_MS: how much consecutive chunks
+// share. Recorders are started every (CHUNK_MS - OVERLAP_MS) but each one still
+// records for the full CHUNK_MS — so a new recorder starts before the previous
+// one stops, meaning a word/number that would've landed exactly on a hard cut
+// now gets captured whole by at least one of the two overlapping recorders.
+// mergeOverlap() above then trims the duplicated text back out.
+const CHUNK_MS = 4000;
+const OVERLAP_MS = 800;
+
 function recordCycle() {
   if (!isRecording) return;
   const recorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
@@ -150,11 +189,12 @@ function recordCycle() {
   recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
   recorder.onstop = () => {
     const blob = new Blob(chunks, { type: "audio/webm" });
-    sendChunk(blob);
-    if (isRecording) recordCycle();
+    sendChunk(blob); // fire and forget so the next cycle isn't blocked
   };
   recorder.start();
-  setTimeout(() => { if (recorder.state === "recording") recorder.stop(); }, 4000);
+  // start the *next* overlapping recorder before this one stops
+  setTimeout(() => { if (isRecording) recordCycle(); }, CHUNK_MS - OVERLAP_MS);
+  setTimeout(() => { if (recorder.state === "recording") recorder.stop(); }, CHUNK_MS);
 }
 
 scribeBtn.onclick = async () => {
@@ -184,13 +224,10 @@ scribeBtn.onclick = async () => {
 
 generateBtn.onclick = async () => {
   rxOutput.innerHTML = '<div class="empty">Generating structured prescription...</div>';
-  
-  // DYNAMIC ENDPOINT SELECTION
-  const usingQwenLocal = modelSelect.value === "qwen-local";
-  const endpoint = usingQwenLocal ? "http://localhost:8001/suggest" : `${BACKEND}/suggest`;
-
+  const usingLocalAsr = modelSelect.value === "qwen-local";
+  const suggestEndpoint = usingLocalAsr ? "http://localhost:8001/suggest" : `${BACKEND}/suggest`;
   try {
-    const res = await fetch(endpoint, {
+    const res = await fetch(suggestEndpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ transcript: transcriptLines.join(" ") }),
@@ -198,13 +235,15 @@ generateBtn.onclick = async () => {
     const data = await res.json();
     renderRx(data);
   } catch (err) {
-    rxOutput.innerHTML = '<div class="empty">Failed to generate prescription (is backend running?)</div>';
+    rxOutput.innerHTML = usingLocalAsr
+      ? '<div class="empty">Failed to generate prescription — is your local_asr script (port 8001) still running? It needs its own /suggest endpoint.</div>'
+      : '<div class="empty">Failed to generate prescription (is backend running?)</div>';
     console.error(err);
   }
 };
 
 function renderRx(rx) {
-  currentRx = rx;
+  currentRx = rx; // keep the last-generated Rx in memory so edits can mutate it
   const meds = (rx.medications || []).map((m, idx) => `
     <tr data-idx="${idx}">
       <td contenteditable="false" data-field="name">${m.name || ""}</td>
@@ -248,6 +287,7 @@ function rxField(field, label, value) {
 }
 
 function wireRxEditing() {
+  // Toggle-edit for the simple text fields (patient, diagnosis, investigations, follow-up, advice)
   rxOutput.querySelectorAll(".field-edit").forEach(btn => {
     btn.onclick = () => {
       const valueDiv = btn.closest(".value-row").querySelector(".value");
@@ -259,6 +299,7 @@ function wireRxEditing() {
     };
   });
 
+  // Toggle-edit for each medication row's cells
   rxOutput.querySelectorAll(".med-edit").forEach(btn => {
     btn.onclick = () => {
       const row = btn.closest("tr");

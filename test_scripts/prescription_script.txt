@@ -1,33 +1,66 @@
-Patient name Ramesh Kumar, age 52, male.
-Diagnosis: Type 2 Diabetes Mellitus with hypertension.
-
-Prescription:
-Tab Metformin 500 mg — twice daily after meals — 30 days
-Tab Amlodipine 5 mg — once daily morning — 30 days
-Tab Telmisartan 40 mg — once daily morning — 30 days
-Tab Atorvastatin 10 mg — once daily at night — 30 days
-Inj Insulin Glargine 10 units — subcutaneous, once daily at bedtime
-
-Investigations: HbA1c, fasting blood glucose, lipid profile, serum creatinine, eGFR, albuminuria
-
-Follow up: 4 weeks
-
-Advice: low salt diet, daily 30 minute walk, monitor BP at home
+Extended stress test — longer, messier, heavier code-switching than the
+original script. Covers every drug in MEDICAL_CONTEXT (Metformin, Amlodipine,
+Amoxicillin, Azithromycin, Metronidazole, Pantoprazole, Atorvastatin,
+Losartan, Paracetamol, Ibuprofen, Cetirizine) at least once, plus deliberate
+self-corrections and filler words the way real dictation actually sounds —
+don't clean this up when you read it out loud, dictate it as written,
+hesitations included.
 
 ---
 
-Second patient for A/B testing (mix in some Hindi-English code-switching if you want to
-stress-test that, since that's the real usage pattern on the floor):
+Patient 1 — Suresh Yadav, umar pachaas saal, male.
 
-Patient name Sunita Devi, age 45, female.
-Diagnosis: Community acquired pneumonia.
+Diagnosis: Type 2 Diabetes Mellitus, uncontrolled — HbA1c ekdum high aaya hai,
+9.2 percent. Hypertension bhi hai, saath mein dyslipidemia.
 
-Prescription:
-Tab Azithromycin 500 mg — once daily before meals — 5 days
-Tab Pantoprazole 40 mg — once daily before meals — 5 days
-Tab Paracetamol 650 mg — as needed for fever — SOS
+Prescription — Tab Metformin, wait, Metformin 500 mg — nahi nahi, 1000 mg BD,
+after meals, 30 days ke liye. Tab Amlodipine 5 mg OD, morning mein, 30 days.
+Tab Atorvastatin 20 mg, once daily at night, 30 days. Tab Losartan 50 mg,
+subah lena hai, once daily, 30 days.
 
-Investigations: chest X-ray, complete blood count, CRP
+Investigations: HbA1c repeat after 3 months, lipid profile, RBS aur FBS,
+serum creatinine.
 
-Follow up: 1 week
-Advice: adequate rest, plenty of fluids
+Follow up 6 weeks mein. Advice: sugar-free diet, walk daily 40 minutes,
+weight loss target 5 kg.
+
+---
+
+Patient 2 — Anjali Mehta, 34 years, female.
+
+Chief complaint: fever since 3 din se, saath mein sore throat aur body ache.
+Throat pe white patches dikh rahe hain, tonsillitis lagta hai.
+
+Diagnosis: acute bacterial tonsillitis, possible strep.
+
+Prescription: Tab Azithromycin 500 mg OD, khaali pet, 3 days only — ya phir
+agar allergy history hai to Amoxicillin 500 mg TDS for 7 days instead, check
+karke decide karo. Tab Paracetamol 650 mg SOS for fever, not more than 4
+times a day. Tab Cetirizine 10 mg HS if throat irritation continues.
+
+Investigations: throat swab culture agar 48 hours mein improve nahi hua to.
+
+Follow up in 1 week, ya sooner agar fever 48 hours se zyada continue kare.
+Advice: warm saline gargles, rest, plenty of fluids.
+
+---
+
+Patient 3 — Mohammed Irfan, 61, male.
+
+History of CKD stage 3, aur ab presenting with epigastric pain, burning type,
+worse on empty stomach. Likely peptic ulcer disease, possible H. pylori.
+
+Prescription: Tab Pantoprazole 40 mg OD, khaali pet subah, before breakfast,
+4 weeks ke liye. Tab Metronidazole 400 mg TDS for 10 days — sath mein
+Amoxicillin bhi add karo, 1 gram BD, dono ek saath 10 days. Tab Ibuprofen is
+contraindicated yahaan, CKD patient hai, avoid karna — instead Paracetamol
+500 mg SOS for pain, max 3 grams a day.
+
+Investigations: H. pylori stool antigen test, serum creatinine aur eGFR
+recheck given the CKD history, complete blood count.
+
+Follow up 4 weeks mein, ya jaldi agar pain worsen ho ya black stools dikhein
+— emergency mein aana turant.
+
+Advice: avoid NSAIDs completely, avoid spicy aur oily food, smaller frequent
+meals, no alcohol.

@@ -19,12 +19,16 @@ import re
 from jiwer import wer
 
 # Terms considered "medical" for the purpose of the narrow WER slice.
-# Keep this in sync with MEDICAL_VOCAB_PROMPT in backend/app.py.
+# Keep this in sync with MEDICAL_VOCAB_PROMPT in backend/app.py and
+# MEDICAL_CONTEXT in backend/local_asr/qwen_asr_local.py.
 MEDICAL_TERMS = {
     "metformin", "amlodipine", "telmisartan", "atorvastatin", "glipizide",
     "insulin", "glargine", "pantoprazole", "azithromycin",
-    "od", "bd", "tds", "qid", "sos", "ac", "pc", "hs",
+    "amoxicillin", "metronidazole", "losartan", "paracetamol",
+    "ibuprofen", "cetirizine",
+    "od", "bd", "tds", "qid", "sos", "ac", "pc", "hs", "stat",
     "hba1c", "egfr", "ldl", "bmi", "creatinine", "albuminuria",
+    "rbs", "fbs", "bp",
     "t2dm", "hypertension", "dyslipidemia", "cad", "ckd",
     "systolic", "diastolic",
 }
