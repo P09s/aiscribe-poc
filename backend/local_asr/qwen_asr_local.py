@@ -16,6 +16,7 @@ import json
 import difflib
 import librosa
 import torch
+from pathlib import Path
 from dotenv import load_dotenv
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
@@ -32,45 +33,113 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 _model = None
 _processor = None
 
-# Extend this with your actual formulary — the more specific to what your
-# doctors actually prescribe, the harder Qwen3-ASR biases toward it.
-MEDICAL_CONTEXT = (
-    "Vocabulary: Metformin, Amlodipine, Amoxicillin, Azithromycin, Metronidazole, "
-    "Pantoprazole, Atorvastatin, Losartan, Paracetamol, Ibuprofen, Cetirizine, "
-    "HbA1c, BP, RBS, FBS, mg, ml, OD, BD, TDS, QID, SOS, stat. "
-    "Numbers and dosages should be transcribed as digits (e.g. 500 mg, twice daily)."
-)
+# ── Formulary loading ────────────────────────────────────────────────────────
+# Loads from backend/formulary/nlem_2022.json (India's National List of
+# Essential Medicines 2022 — the government-published source of truth for drugs
+# that can appear in an Indian prescription). Falls back to a minimal hardcoded
+# list if the file is missing so the server still starts.
+#
+# To extend: add drug names to nlem_2022.json and restart. No code changes
+# needed. If a new drug isn't in the NLEM but your doctors prescribe it, add it
+# to nlem_2022.json — the file is the single source of truth now, not this code.
 
-# Same list as MEDICAL_CONTEXT, but as discrete entries for fuzzy-matching —
-# keep these two in sync when you extend the formulary.
-FORMULARY = [
-    "Metformin", "Amlodipine", "Amoxicillin", "Azithromycin", "Metronidazole",
-    "Pantoprazole", "Atorvastatin", "Losartan", "Paracetamol", "Ibuprofen",
-    "Cetirizine", "HbA1c", "BP", "RBS", "FBS",
+_FORMULARY_PATH = Path(__file__).parent.parent / "formulary" / "nlem_2022.json"
+_ALIASES_PATH = Path(__file__).parent.parent / "formulary" / "phonetic_aliases.json"
+
+_FALLBACK_FORMULARY = [
+    "Metformin", "Amlodipine", "Amoxicillin", "Azithromycin",
+    "Pantoprazole", "Atorvastatin", "Losartan", "Paracetamol",
 ]
-_FORMULARY_LOWER = {w.lower(): w for w in FORMULARY}
 
-# Deliberately lower than app.py's Whisper cutoff (0.78). Qwen's drug-name
-# misses in testing were bigger distortions than Whisper's (e.g. "Amlodipine"
-# -> "MLOD pine", "Metformin" -> "मेटाफॉर्न") — a tighter cutoff would let
-# those slip through uncorrected. Lowering it risks more false-positive
-# corrections on words that were never drug names; that tradeoff is exactly
-# what the extended stress-test run should validate either way.
-FUZZY_CUTOFF = 0.62
+def _load_formulary() -> list[str]:
+    if _FORMULARY_PATH.exists():
+        with open(_FORMULARY_PATH, "r", encoding="utf-8") as f:
+            drugs = json.load(f)
+        print(f"Formulary loaded: {len(drugs)} drugs from {_FORMULARY_PATH.name}")
+        return drugs
+    print(f"WARNING: {_FORMULARY_PATH} not found — using fallback formulary ({len(_FALLBACK_FORMULARY)} drugs)")
+    return _FALLBACK_FORMULARY
+
+def _load_aliases() -> dict:
+    if _ALIASES_PATH.exists():
+        with open(_ALIASES_PATH, "r", encoding="utf-8") as f:
+            aliases = json.load(f)
+        print(f"Phonetic aliases loaded: {len(aliases)} entries from {_ALIASES_PATH.name}")
+        return aliases
+    print(f"WARNING: {_ALIASES_PATH} not found — run backend/formulary/generate_aliases.py to generate it")
+    return {}
+
+FORMULARY = _load_formulary()
+_FORMULARY_LOWER = {w.lower(): w for w in FORMULARY}
+_PHONETIC_ALIASES = _load_aliases()
+
+# Clinical abbreviations added separately — these don't live in the NLEM drug
+# list but are just as important for ASR correction in prescription dictation.
+_CLINICAL_ABBREVS = {
+    "od": "OD", "bd": "BD", "tds": "TDS", "qid": "QID",
+    "sos": "SOS", "ac": "AC", "pc": "PC", "hs": "HS", "stat": "STAT",
+    "hba1c": "HbA1c", "bp": "BP", "rbs": "RBS", "fbs": "FBS",
+    "egfr": "eGFR", "ldl": "LDL", "bmi": "BMI",
+}
+
+# Build MEDICAL_CONTEXT dynamically from the loaded formulary so the ASR
+# vocabulary-bias prompt always reflects the current formulary file —
+# no more keeping two lists in sync manually.
+def _build_medical_context(formulary: list[str]) -> str:
+    # Top 30 most commonly prescribed — enough for the prompt bias without
+    # hitting token limits. The full list is used for fuzzy correction below.
+    top_drugs = ", ".join(formulary[:30])
+    abbrevs = ", ".join(_CLINICAL_ABBREVS.values())
+    return (
+        f"Prescription dictation vocabulary. Common drugs: {top_drugs}. "
+        f"Abbreviations: {abbrevs}, mg, ml, units. "
+        "Dosages should be transcribed as digits (e.g. 500 mg, twice daily, OD, BD)."
+    )
+
+MEDICAL_CONTEXT = _build_medical_context(FORMULARY)
+
+# Fuzzy cutoff — raised back to 0.72 now that phonetic aliases handle the
+# hard cases. A lower cutoff was causing dangerous false positives
+# (e.g. "Dapoxetine" matching for "Domperidone"). The alias file covers
+# 2900+ variants so fuzzy only needs to catch minor spelling differences now.
+FUZZY_CUTOFF = 0.72
 
 
 def correct_drug_names(text: str, cutoff: float = FUZZY_CUTOFF) -> str:
-    """Fuzzy-matches each word/short phrase against the known formulary and swaps
-    in the correct spelling on a close-enough match. Runs on whatever script the
-    ASR produced (Devanagari, Roman-script Hinglish, or English) — matching is
-    done against Roman-script formulary entries, so it only fixes formulary words
-    that came out in Roman characters. Devanagari renderings of drug names
-    (e.g. "मेटाफॉर्न") won't be caught by this pass; that's a known gap, not
-    a silent failure — flag it if it shows up a lot in the extended test."""
+    """Three-pass correction:
+    Pass 1 — phonetic alias map (multi-word and single-word known mishearings)
+    Pass 2 — exact match on clinical abbreviations (OD, BD, HbA1c etc.)
+    Pass 3 — fuzzy match on drug names from the full NLEM formulary
+
+    Phonetic aliases run first because they handle multi-word splits
+    (e.g. 'onden cetron' → 'Ondansetron') that neither abbreviation
+    nor single-token fuzzy matching can catch."""
+    import re as _re
+
+    # Pass 1 — phonetic aliases on full text string
+    # Sort by length descending so longer phrases match before their substrings
+    text_lower = text.lower()
+    for alias in sorted(_PHONETIC_ALIASES.keys(), key=len, reverse=True):
+        if alias in text_lower:
+            pattern = _re.compile(_re.escape(alias), _re.IGNORECASE)
+            text = pattern.sub(_PHONETIC_ALIASES[alias], text)
+            text_lower = text.lower()
+
+    # Pass 2 & 3 — token-level abbreviation + fuzzy correction
     words = text.split()
     out = []
     i = 0
     while i < len(words):
+        raw_word = words[i]
+        clean = raw_word.strip(",.।").lower()
+
+        # Pass 2: exact abbreviation match
+        if clean in _CLINICAL_ABBREVS:
+            out.append(_CLINICAL_ABBREVS[clean])
+            i += 1
+            continue
+
+        # Pass 3: fuzzy drug-name match — try 2-word spans first
         matched = False
         for span in (2, 1):
             if i + span > len(words):
@@ -78,15 +147,19 @@ def correct_drug_names(text: str, cutoff: float = FUZZY_CUTOFF) -> str:
             candidate = " ".join(words[i:i + span]).strip(",.।").lower()
             if not candidate:
                 continue
-            match = difflib.get_close_matches(candidate, _FORMULARY_LOWER.keys(), n=1, cutoff=cutoff)
+            match = difflib.get_close_matches(
+                candidate, _FORMULARY_LOWER.keys(), n=1, cutoff=cutoff
+            )
             if match:
                 out.append(_FORMULARY_LOWER[match[0]])
                 i += span
                 matched = True
                 break
+
         if not matched:
-            out.append(words[i])
+            out.append(raw_word)
             i += 1
+
     return " ".join(out)
 
 
